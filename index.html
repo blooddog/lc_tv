@@ -4,11 +4,14 @@
 <meta charset="UTF-8"/>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
-  html, body { width:100%; height:100%; overflow:hidden; background:#000; }
+  html, body { width:1280px; height:720px; overflow:hidden; background:#000; }
+
+  /* Standby */
   #standby {
     position:absolute; inset:0; display:flex; flex-direction:column;
     align-items:center; justify-content:center; gap:20px;
     background:linear-gradient(135deg,#0a0500,#1a0800);
+    transition:opacity .4s;
   }
   #logo {
     font-size:64px; font-weight:900; letter-spacing:8px; font-family:sans-serif;
@@ -16,86 +19,190 @@
     -webkit-background-clip:text; -webkit-text-fill-color:transparent;
   }
   #sub { font-size:16px; color:rgba(249,115,22,.5); letter-spacing:4px; font-family:sans-serif; }
-  #frame { position:absolute; inset:0; width:100%; height:100%; border:none; display:none; }
+
+  /* Loading overlay */
+  #loading {
+    position:absolute; inset:0; display:none; flex-direction:column;
+    align-items:center; justify-content:center; gap:24px;
+    background:linear-gradient(135deg,#0a0500,#1a0800);
+    z-index:10;
+  }
+  #loading-logo {
+    font-size:52px; font-weight:900; letter-spacing:8px; font-family:sans-serif;
+    background:linear-gradient(90deg,#f97316,#fbbf24);
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+  }
+  #loading-text {
+    font-size:18px; color:#f97316; font-family:sans-serif; letter-spacing:2px;
+  }
+  #loading-bar-wrap {
+    width:460px; height:6px;
+    background:rgba(249,115,22,.15);
+    border-radius:6px; overflow:hidden;
+    border:1px solid rgba(249,115,22,.25);
+  }
+  #loading-bar {
+    height:100%; width:0%; border-radius:6px;
+    background:linear-gradient(90deg,#f97316,#fbbf24);
+    box-shadow:0 0 12px rgba(249,115,22,.7);
+    transition:width .1s linear;
+  }
+  #loading-pct {
+    font-size:13px; color:rgba(249,115,22,.55); font-family:sans-serif; letter-spacing:1px;
+  }
+
+  /* Player frame */
+  #frame {
+    position:absolute; inset:0; width:1280px; height:720px;
+    border:none; display:none; z-index:5;
+  }
+
+  /* Error */
   #err {
     position:absolute; inset:0; display:none; flex-direction:column;
-    align-items:center; justify-content:center; gap:12px;
-    background:#0a0500; font-family:sans-serif; text-align:center; padding:40px;
+    align-items:center; justify-content:center; gap:14px;
+    background:#0a0500; font-family:sans-serif; text-align:center; padding:40px; z-index:10;
   }
-  #err-icon { font-size:48px; }
-  #err-msg  { font-size:18px; font-weight:700; color:#f97316; }
-  #err-sub  { font-size:13px; color:rgba(249,115,22,.55); max-width:480px; line-height:1.6; }
+  #err-icon { font-size:52px; }
+  #err-msg  { font-size:20px; font-weight:700; color:#f97316; }
+  #err-sub  { font-size:13px; color:rgba(249,115,22,.55); max-width:500px; line-height:1.6; }
 </style>
 </head>
 <body>
-<div id="standby"><div id="logo">LOSTCITY TV</div><div id="sub">BEREIT</div></div>
-<iframe id="frame" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>
-<div id="err"><div id="err-icon">⚠️</div><div id="err-msg"></div><div id="err-sub"></div></div>
+
+<div id="standby">
+  <div id="logo">LOSTCITY TV</div>
+  <div id="sub">BEREIT</div>
+</div>
+
+<div id="loading">
+  <div id="loading-logo">LOSTCITY TV</div>
+  <div id="loading-text">Lade Video…</div>
+  <div id="loading-bar-wrap"><div id="loading-bar"></div></div>
+  <div id="loading-pct">0%</div>
+</div>
+
+<iframe id="frame"
+  allow="autoplay; encrypted-media; fullscreen"
+  allowfullscreen="true"
+></iframe>
+
+<div id="err">
+  <div id="err-icon">⚠️</div>
+  <div id="err-msg"></div>
+  <div id="err-sub"></div>
+</div>
 
 <script>
-var frame   = document.getElementById('frame');
-var standby = document.getElementById('standby');
-var errBox  = document.getElementById('err');
+var frame    = document.getElementById('frame');
+var standby  = document.getElementById('standby');
+var loading  = document.getElementById('loading');
+var errBox   = document.getElementById('err');
+var loadBar  = document.getElementById('loading-bar');
+var loadPct  = document.getElementById('loading-pct');
+var loadTxt  = document.getElementById('loading-text');
+
+var loadInterval = null;
 
 function hide() {
-  frame.style.display   = 'none';
   standby.style.display = 'none';
+  loading.style.display = 'none';
   errBox.style.display  = 'none';
+  frame.style.display   = 'none';
 }
-function play(src) {
+
+function showLoading(text) {
   hide();
-  frame.src           = src;
-  frame.style.display = 'block';
+  loadTxt.textContent   = text || 'Lade Video…';
+  loadBar.style.width   = '0%';
+  loadPct.textContent   = '0%';
+  loading.style.display = 'flex';
+
+  // Animate progress bar — fake progress up to 90%, rest on frame load
+  var pct = 0;
+  clearInterval(loadInterval);
+  loadInterval = setInterval(function() {
+    if (pct < 88) {
+      pct += Math.random() * 4 + 1;
+      if (pct > 88) pct = 88;
+      setProgress(pct);
+    }
+  }, 120);
 }
+
+function setProgress(pct) {
+  pct = Math.min(100, Math.round(pct));
+  loadBar.style.width  = pct + '%';
+  loadPct.textContent  = pct + '%';
+}
+
+function finishLoading() {
+  clearInterval(loadInterval);
+  setProgress(100);
+  setTimeout(function() {
+    hide();
+    frame.style.display = 'block';
+  }, 300);
+}
+
 function stop() {
+  clearInterval(loadInterval);
+  frame.src = 'about:blank';
   hide();
-  frame.src             = 'about:blank';
   standby.style.display = 'flex';
 }
-function error(msg, sub) {
+
+function showError(msg, sub) {
+  clearInterval(loadInterval);
   hide();
   document.getElementById('err-msg').textContent = msg;
   document.getElementById('err-sub').textContent = sub || '';
   errBox.style.display = 'flex';
 }
 
-function youtube(id) {
-  play('https://www.youtube-nocookie.com/embed/' + id
+function playYoutube(id) {
+  showLoading('Lade YouTube Video…');
+  frame.onload = finishLoading;
+  frame.src = 'https://www.youtube-nocookie.com/embed/' + id
     + '?autoplay=1&mute=0&controls=1&rel=0&modestbranding=1'
-    + '&playsinline=1&iv_load_policy=3&enablejsapi=1');
+    + '&playsinline=1&iv_load_policy=3&enablejsapi=1';
 }
 
-function twitch(channel) {
-  // parent MUST match the hostname of this page
+function playTwitch(channel) {
+  showLoading('Lade Twitch Stream…');
+  frame.onload = finishLoading;
   var host = window.location.hostname;
-  play('https://player.twitch.tv/?channel=' + encodeURIComponent(channel)
+  frame.src = 'https://player.twitch.tv/?channel=' + encodeURIComponent(channel)
     + '&parent=' + host
-    + '&autoplay=true&muted=false');
+    + '&autoplay=true&muted=false';
 }
 
-// Receive commands from FiveM
+function setVolume(val) {
+  try {
+    frame.contentWindow.postMessage(
+      JSON.stringify({event:'command', func:'setVolume', args:[val]}), '*');
+  } catch(e) {}
+}
+
 window.addEventListener('message', function(e) {
   var d;
   try { d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data; }
   catch(err) { return; }
   if (!d || !d.action) return;
 
-  if      (d.action === 'play_youtube') youtube(d.id);
-  else if (d.action === 'play_twitch')  twitch(d.channel);
+  if      (d.action === 'play_youtube') playYoutube(d.id);
+  else if (d.action === 'play_twitch')  playTwitch(d.channel);
   else if (d.action === 'stop')         stop();
-  else if (d.action === 'volume') {
-    try { frame.contentWindow.postMessage(JSON.stringify({event:'command',func:'setVolume',args:[d.value]}),'*'); }
-    catch(e){}
-  }
-  else if (d.action === 'error') error(d.msg, d.sub);
+  else if (d.action === 'volume')       setVolume(d.value);
+  else if (d.action === 'error')        showError(d.msg, d.sub);
 });
 
-// Auto-start from URL hash: index.html#youtube/ID  or  index.html#twitch/CHANNEL
+// Auto-start from URL hash
 var hash = window.location.hash.slice(1);
 if (hash) {
   var parts = hash.split('/');
-  if (parts[0] === 'youtube' && parts[1]) youtube(parts[1]);
-  else if (parts[0] === 'twitch' && parts[1]) twitch(parts[1]);
+  if (parts[0] === 'youtube' && parts[1]) playYoutube(parts[1]);
+  else if (parts[0] === 'twitch' && parts[1]) playTwitch(parts[1]);
 }
 </script>
 </body>
