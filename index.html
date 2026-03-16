@@ -116,29 +116,35 @@ function startLoading(text) {
 
   clearInterval(loadTimer);
 
-  // Phase 1: 0→70% over ~3 seconds (slow, realistic)
+  var startTime = Date.now();
+  var MIN_DISPLAY_MS = 7000; // minimum 7 seconds loading screen
+
+  // Phase 1: 0→75% over ~5 seconds
   var phase = 1;
   loadTimer = setInterval(function() {
+    var elapsed = Date.now() - startTime;
+
     if (phase === 1) {
-      if (currentPct < 70) {
-        setBar(currentPct + (Math.random() * 2.5 + 0.5));
+      if (currentPct < 75) {
+        setBar(currentPct + (Math.random() * 1.2 + 0.3));
       } else {
         phase = 2;
       }
     } else if (phase === 2) {
-      // Phase 2: stall at 70-85% waiting for iframe
-      if (currentPct < 85) {
-        setBar(currentPct + (Math.random() * 0.4));
+      // Stall at 75-92%, wait for iframe AND minimum time
+      if (currentPct < 92) {
+        setBar(currentPct + (Math.random() * 0.3));
       }
-      // Once iframe fires onload, phase 3 kicks in
-      if (iframeReady) { phase = 3; }
+      if (iframeReady && elapsed >= MIN_DISPLAY_MS) {
+        phase = 3;
+      }
     } else if (phase === 3) {
-      // Phase 3: rush to 100%
+      // Rush to 100%
       if (currentPct < 100) {
-        setBar(currentPct + 4);
+        setBar(currentPct + 3);
       } else {
         clearInterval(loadTimer);
-        setTimeout(showVideo, 400);
+        setTimeout(showVideo, 500);
       }
     }
   }, 80);
