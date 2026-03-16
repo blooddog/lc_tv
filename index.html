@@ -6,58 +6,48 @@
   * { margin:0; padding:0; box-sizing:border-box; }
   html, body { width:1280px; height:720px; overflow:hidden; background:#000; }
 
-  /* Standby */
   #standby {
     position:absolute; inset:0; display:flex; flex-direction:column;
     align-items:center; justify-content:center; gap:20px;
     background:linear-gradient(135deg,#0a0500,#1a0800);
-    transition:opacity .4s;
   }
-  #logo {
+  #standby-logo {
     font-size:64px; font-weight:900; letter-spacing:8px; font-family:sans-serif;
     background:linear-gradient(90deg,#f97316,#fbbf24);
     -webkit-background-clip:text; -webkit-text-fill-color:transparent;
   }
-  #sub { font-size:16px; color:rgba(249,115,22,.5); letter-spacing:4px; font-family:sans-serif; }
+  #standby-sub { font-size:16px; color:rgba(249,115,22,.5); letter-spacing:4px; font-family:sans-serif; }
 
-  /* Loading overlay */
   #loading {
     position:absolute; inset:0; display:none; flex-direction:column;
-    align-items:center; justify-content:center; gap:24px;
+    align-items:center; justify-content:center; gap:28px;
     background:linear-gradient(135deg,#0a0500,#1a0800);
     z-index:10;
   }
   #loading-logo {
-    font-size:52px; font-weight:900; letter-spacing:8px; font-family:sans-serif;
+    font-size:56px; font-weight:900; letter-spacing:8px; font-family:sans-serif;
     background:linear-gradient(90deg,#f97316,#fbbf24);
     -webkit-background-clip:text; -webkit-text-fill-color:transparent;
   }
-  #loading-text {
-    font-size:18px; color:#f97316; font-family:sans-serif; letter-spacing:2px;
-  }
+  #loading-text { font-size:20px; color:#f97316; font-family:sans-serif; letter-spacing:3px; }
   #loading-bar-wrap {
-    width:460px; height:6px;
-    background:rgba(249,115,22,.15);
-    border-radius:6px; overflow:hidden;
-    border:1px solid rgba(249,115,22,.25);
+    width:500px; height:8px;
+    background:rgba(249,115,22,.15); border-radius:8px;
+    border:1px solid rgba(249,115,22,.25); overflow:hidden;
   }
   #loading-bar {
-    height:100%; width:0%; border-radius:6px;
+    height:100%; width:0%; border-radius:8px;
     background:linear-gradient(90deg,#f97316,#fbbf24);
-    box-shadow:0 0 12px rgba(249,115,22,.7);
-    transition:width .1s linear;
+    box-shadow:0 0 16px rgba(249,115,22,.8);
+    transition:width .15s ease-out;
   }
-  #loading-pct {
-    font-size:13px; color:rgba(249,115,22,.55); font-family:sans-serif; letter-spacing:1px;
-  }
+  #loading-pct { font-size:14px; color:rgba(249,115,22,.6); font-family:sans-serif; letter-spacing:2px; }
 
-  /* Player frame */
   #frame {
     position:absolute; inset:0; width:1280px; height:720px;
     border:none; display:none; z-index:5;
   }
 
-  /* Error */
   #err {
     position:absolute; inset:0; display:none; flex-direction:column;
     align-items:center; justify-content:center; gap:14px;
@@ -71,8 +61,8 @@
 <body>
 
 <div id="standby">
-  <div id="logo">LOSTCITY TV</div>
-  <div id="sub">BEREIT</div>
+  <div id="standby-logo">LOSTCITY TV</div>
+  <div id="standby-sub">BEREIT</div>
 </div>
 
 <div id="loading">
@@ -82,10 +72,7 @@
   <div id="loading-pct">0%</div>
 </div>
 
-<iframe id="frame"
-  allow="autoplay; encrypted-media; fullscreen"
-  allowfullscreen="true"
-></iframe>
+<iframe id="frame" allow="autoplay; encrypted-media; fullscreen" allowfullscreen="true"></iframe>
 
 <div id="err">
   <div id="err-icon">⚠️</div>
@@ -98,11 +85,13 @@ var frame    = document.getElementById('frame');
 var standby  = document.getElementById('standby');
 var loading  = document.getElementById('loading');
 var errBox   = document.getElementById('err');
-var loadBar  = document.getElementById('loading-bar');
-var loadPct  = document.getElementById('loading-pct');
+var bar      = document.getElementById('loading-bar');
+var pct      = document.getElementById('loading-pct');
 var loadTxt  = document.getElementById('loading-text');
 
-var loadInterval = null;
+var loadTimer   = null;
+var currentPct  = 0;
+var iframeReady = false;
 
 function hide() {
   standby.style.display = 'none';
@@ -111,49 +100,65 @@ function hide() {
   frame.style.display   = 'none';
 }
 
-function showLoading(text) {
+function setBar(val) {
+  currentPct = Math.min(100, Math.max(0, val));
+  bar.style.width    = currentPct + '%';
+  pct.textContent    = Math.round(currentPct) + '%';
+}
+
+function startLoading(text) {
   hide();
   loadTxt.textContent   = text || 'Lade Video…';
-  loadBar.style.width   = '0%';
-  loadPct.textContent   = '0%';
   loading.style.display = 'flex';
+  currentPct  = 0;
+  iframeReady = false;
+  setBar(0);
 
-  // Animate progress bar — fake progress up to 90%, rest on frame load
-  var pct = 0;
-  clearInterval(loadInterval);
-  loadInterval = setInterval(function() {
-    if (pct < 88) {
-      pct += Math.random() * 4 + 1;
-      if (pct > 88) pct = 88;
-      setProgress(pct);
+  clearInterval(loadTimer);
+
+  // Phase 1: 0→70% over ~3 seconds (slow, realistic)
+  var phase = 1;
+  loadTimer = setInterval(function() {
+    if (phase === 1) {
+      if (currentPct < 70) {
+        setBar(currentPct + (Math.random() * 2.5 + 0.5));
+      } else {
+        phase = 2;
+      }
+    } else if (phase === 2) {
+      // Phase 2: stall at 70-85% waiting for iframe
+      if (currentPct < 85) {
+        setBar(currentPct + (Math.random() * 0.4));
+      }
+      // Once iframe fires onload, phase 3 kicks in
+      if (iframeReady) { phase = 3; }
+    } else if (phase === 3) {
+      // Phase 3: rush to 100%
+      if (currentPct < 100) {
+        setBar(currentPct + 4);
+      } else {
+        clearInterval(loadTimer);
+        setTimeout(showVideo, 400);
+      }
     }
-  }, 120);
+  }, 80);
 }
 
-function setProgress(pct) {
-  pct = Math.min(100, Math.round(pct));
-  loadBar.style.width  = pct + '%';
-  loadPct.textContent  = pct + '%';
-}
-
-function finishLoading() {
-  clearInterval(loadInterval);
-  setProgress(100);
-  setTimeout(function() {
-    hide();
-    frame.style.display = 'block';
-  }, 300);
+function showVideo() {
+  clearInterval(loadTimer);
+  hide();
+  frame.style.display = 'block';
 }
 
 function stop() {
-  clearInterval(loadInterval);
+  clearInterval(loadTimer);
   frame.src = 'about:blank';
   hide();
   standby.style.display = 'flex';
 }
 
 function showError(msg, sub) {
-  clearInterval(loadInterval);
+  clearInterval(loadTimer);
   hide();
   document.getElementById('err-msg').textContent = msg;
   document.getElementById('err-sub').textContent = sub || '';
@@ -161,20 +166,19 @@ function showError(msg, sub) {
 }
 
 function playYoutube(id) {
-  showLoading('Lade YouTube Video…');
-  frame.onload = finishLoading;
+  startLoading('Lade YouTube Video…');
+  frame.onload = function() { iframeReady = true; };
   frame.src = 'https://www.youtube-nocookie.com/embed/' + id
     + '?autoplay=1&mute=0&controls=1&rel=0&modestbranding=1'
     + '&playsinline=1&iv_load_policy=3&enablejsapi=1';
 }
 
 function playTwitch(channel) {
-  showLoading('Lade Twitch Stream…');
-  frame.onload = finishLoading;
+  startLoading('Lade Twitch Stream…');
+  frame.onload = function() { iframeReady = true; };
   var host = window.location.hostname;
   frame.src = 'https://player.twitch.tv/?channel=' + encodeURIComponent(channel)
-    + '&parent=' + host
-    + '&autoplay=true&muted=false';
+    + '&parent=' + host + '&autoplay=true&muted=false';
 }
 
 function setVolume(val) {
@@ -197,12 +201,11 @@ window.addEventListener('message', function(e) {
   else if (d.action === 'error')        showError(d.msg, d.sub);
 });
 
-// Auto-start from URL hash
 var hash = window.location.hash.slice(1);
 if (hash) {
   var parts = hash.split('/');
-  if (parts[0] === 'youtube' && parts[1]) playYoutube(parts[1]);
-  else if (parts[0] === 'twitch' && parts[1]) playTwitch(parts[1]);
+  if      (parts[0] === 'youtube' && parts[1]) playYoutube(parts[1]);
+  else if (parts[0] === 'twitch'  && parts[1]) playTwitch(parts[1]);
 }
 </script>
 </body>
