@@ -207,10 +207,28 @@ triggerPlay = function(data) {
 };
 
 function setVolume(val) {
+  // Primary: postMessage to YouTube IFrame API
   try {
     frame.contentWindow.postMessage(
       JSON.stringify({event:'command', func:'setVolume', args:[val]}), '*');
   } catch(e) {}
+  // Fallback: CSS volume via media element
+  try {
+    var videos = frame.contentDocument
+      ? frame.contentDocument.querySelectorAll('video,audio')
+      : [];
+    for (var i = 0; i < videos.length; i++) {
+      videos[i].volume = val / 100;
+    }
+  } catch(e) {}
+  // Visual feedback even if API fails
+  var icon = document.getElementById('volIcon');
+  if (icon) {
+    var w1 = document.getElementById('vol-wave1');
+    var w2 = document.getElementById('vol-wave2');
+    if (w1) w1.style.opacity = val > 0 ? '1' : '0.15';
+    if (w2) w2.style.opacity = val > 50 ? '1' : '0.15';
+  }
 }
 
 window.addEventListener('message', function(e) {
