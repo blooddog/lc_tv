@@ -83,18 +83,11 @@ var loadTxt = document.getElementById('loading-text');
 
 var loadTimer     = null;
 var currentPct    = 0;
-var pendingPlay   = null;    // stores {type, id/channel} to play after bar finishes
-
-// ── FIX: Lautstärke speichern ─────────────────────────────────────────────
-// Damit Änderungen am Regler während des Ladescreens greifen sobald das Video startet.
-var currentVolume = 100;
-
-// ── FIX: Video-Sync (Seek zur richtigen Position) ────────────────────────
-// seekTarget  = Sekunden die das Video auf dem Server bereits läuft
-// seekStarted = Date.now() beim Empfang des Play-Befehls
-// → nach dem Ladebalken wird seekTarget + vergangene Zeit als Zielposition verwendet.
-var seekTarget  = 0;
-var seekStarted = 0;
+var pendingPlay   = null; // stores {type, id/channel} to play after bar finishes
+var currentVolume = 100;  // zuletzt gesetzter Lautstärkewert – wird nach dem Ladescreen angewendet
+var seekTarget    = 0;    // Sekunden, zu denen nach dem Ladebalken gesprungen wird (Video-Sync)
+var seekStarted   = 0;    // Date.now() beim Empfang des Play-Befehls – für exakten Seek
+var seekTimer     = null; // setTimeout-Handle – wird bei Stop gecancelt
 
 function hide() {
   standby.style.display = 'none';
@@ -122,14 +115,17 @@ function startLoading(text) {
 
   loadTimer = setInterval(function() {
     var elapsed = Date.now() - startTime;
-    var timePct = Math.min(95, (elapsed / MIN_MS) * 95);
+    var timePct = Math.min(95, (elapsed / MIN_MS) * 95); // time-based up to 95%
 
     if (currentPct < timePct) {
+      // Smooth increment toward time-based target
       setBar(currentPct + (Math.random() * 1.5 + 0.5));
     }
 
+    // Only finish when 7 seconds passed
     if (elapsed >= MIN_MS && currentPct >= 90) {
       clearInterval(loadTimer);
+      // Rush to 100%
       var rush = setInterval(function() {
         if (currentPct < 100) {
           setBar(currentPct + 5);
@@ -138,6 +134,7 @@ function startLoading(text) {
           setTimeout(function() {
             hide();
             frame.style.display = 'block';
+            // NOW start actual playback
             if (pendingPlay) {
               triggerPlay(pendingPlay);
               pendingPlay = null;
@@ -149,7 +146,7 @@ function startLoading(text) {
   }, 80);
 }
 
-// Wird NACH dem Ladebalken aufgerufen – startet Wiedergabe + Seek + Lautstärke
+// Actually trigger playback inside the iframe (called AFTER bar is done)
 function triggerPlay(data) {
   if (data.type === 'youtube') {
     // Video starten
@@ -157,19 +154,22 @@ function triggerPlay(data) {
       frame.contentWindow.postMessage(
         JSON.stringify({event:'command', func:'playVideo', args:[]}), '*');
     } catch(e) {}
-
-    // ── FIX: gespeicherte Lautstärke anwenden (nicht hardcoded 100) ──────
+    // Lautstärke anwenden
     try {
       frame.contentWindow.postMessage(
         JSON.stringify({event:'command', func:'setVolume', args:[currentVolume]}), '*');
     } catch(e) {}
-
-    // ── FIX: Video-Sync — zur richtigen Position springen ────────────────
-    // seekTarget = Sekunden vom Server + Setup-Zeit (bereits in Lua eingerechnet)
-    // + Zeit die seit Empfang des Play-Befehls vergangen ist (Ladebalken-Dauer)
-    var totalSeek = seekTarget + (Date.now() - seekStarted) / 1000;
-    if (totalSeek > 2) {
-      setTimeout(function() {
+    // ── VIDEO-SYNC: zur richtigen Position springen ───────────────────
+    // seekTarget = Sekunden die das Video bereits läuft (geliefert vom Server via Lua)
+    // + Zeit die seit Empfang des Play-Befehls vergangen ist (= Ladebalken-Dauer u.ä.)
+    // Nur seeken wenn ein expliziter Sync-Zielwert da ist (seekTarget > 2).
+    // seekTarget=0 = neues Video → KEIN Seek, sonst springt jedes Video um ~7s vor
+    // (= Ladebalken-Dauer die sonst in totalSeek einfliesst).
+    if (seekTarget > 2) {
+      var totalSeek = seekTarget + (Date.now() - seekStarted) / 1000;
+      clearTimeout(seekTimer);
+      seekTimer = setTimeout(function() {
+        seekTimer = null;
         try {
           frame.contentWindow.postMessage(
             JSON.stringify({event:'command', func:'seekTo', args:[Math.floor(totalSeek), true]}), '*');
@@ -177,10 +177,11 @@ function triggerPlay(data) {
       }, 800);
     }
   }
-  // Twitch = Livestream → immer aktuell, kein Seek nötig
+  // Twitch: Livestream → immer aktuell, kein Seek nötig
 }
 
 function stop() {
+  clearTimeout(seekTimer); seekTimer = null;  // pendenden seekTo canceln!
   clearInterval(loadTimer);
   frame.src   = 'about:blank';
   pendingPlay = null;
@@ -198,10 +199,13 @@ function showError(msg, sub) {
   errBox.style.display = 'flex';
 }
 
-// ── FIX: elapsed mitspeichern für Sync ───────────────────────────────────
 function playYoutube(id, elapsed) {
+  // Alten seekTo-Timer canceln – neues Video, neue Regeln
+  clearTimeout(seekTimer); seekTimer = null;
+  // seekTarget und Startzeitpunkt für die Sync-Berechnung in triggerPlay speichern
   seekTarget  = elapsed || 0;
   seekStarted = Date.now();
+  // Load iframe with autoplay=0 — video loads silently, plays only after bar
   frame.src = 'https://www.youtube-nocookie.com/embed/' + id
     + '?autoplay=0&mute=0&controls=1&rel=0&modestbranding=1'
     + '&playsinline=1&iv_load_policy=3&enablejsapi=1';
@@ -210,7 +214,7 @@ function playYoutube(id, elapsed) {
 }
 
 function playTwitch(channel) {
-  // Twitch = Livestream → kein Seek nötig
+  // Twitch = Livestream → kein Seek nötig, immer aktuell
   seekTarget  = 0;
   seekStarted = Date.now();
   var host = window.location.hostname;
@@ -220,14 +224,15 @@ function playTwitch(channel) {
   startLoading('Lade Twitch Stream…');
 }
 
-// Nach Ladebalken: Twitch mit autoplay=true neu laden + Lautstärke setzen
+// After bar: unmute and play twitch
 var origTriggerPlay = triggerPlay;
 triggerPlay = function(data) {
   if (data.type === 'twitch') {
+    // Reload with autoplay=true after delay
     var host = window.location.hostname;
     frame.src = 'https://player.twitch.tv/?channel=' + encodeURIComponent(data.channel)
       + '&parent=' + host + '&autoplay=true&muted=false';
-    // ── FIX: Twitch Lautstärke nach dem Laden setzen ─────────────────
+    // Twitch Lautstärke nach dem Laden setzen (verzögert, damit der Player Zeit hat zu starten)
     setTimeout(function() {
       try {
         frame.contentWindow.postMessage(
@@ -239,15 +244,13 @@ triggerPlay = function(data) {
   }
 };
 
-// ── FIX: Lautstärke speichern + sofort anwenden ──────────────────────────
 function setVolume(val) {
-  currentVolume = Math.max(0, Math.min(100, val));
-  // YouTube
+  currentVolume = Math.max(0, Math.min(100, val)); // Lautstärke immer speichern
   try {
     frame.contentWindow.postMessage(
       JSON.stringify({event:'command', func:'setVolume', args:[currentVolume]}), '*');
   } catch(e) {}
-  // Twitch
+  // Auch Twitch-Format versuchen
   try {
     frame.contentWindow.postMessage(
       JSON.stringify({event:'setVolume', value: currentVolume / 100}), '*');
@@ -260,13 +263,14 @@ window.addEventListener('message', function(e) {
   catch(err) { return; }
   if (!d || !d.action) return;
 
-  // elapsed (d.elapsed) wird von Lua mitgeschickt für Video-Sync
   if      (d.action === 'play_youtube') playYoutube(d.id, d.elapsed || 0);
   else if (d.action === 'play_twitch')  playTwitch(d.channel);
   else if (d.action === 'stop')         stop();
   else if (d.action === 'volume')       setVolume(d.value);
   else if (d.action === 'error')        showError(d.msg, d.sub);
   else if (d.action === 'poweroff') {
+    // Completely black — hide everything including standby
+    clearTimeout(seekTimer); seekTimer = null;
     clearInterval(loadTimer);
     frame.src = 'about:blank';
     standby.style.display = 'none';
@@ -276,6 +280,7 @@ window.addEventListener('message', function(e) {
     document.body.style.background = '#000';
   }
   else if (d.action === 'standby') {
+    clearTimeout(seekTimer); seekTimer = null;
     clearInterval(loadTimer);
     frame.src = 'about:blank';
     hide();
@@ -287,7 +292,7 @@ window.addEventListener('message', function(e) {
 var hash = window.location.hash.slice(1);
 if (hash) {
   var parts = hash.split('/');
-  if      (parts[0] === 'youtube' && parts[1]) playYoutube(parts[1], 0);
+  if      (parts[0] === 'youtube' && parts[1]) playYoutube(parts[1]);
   else if (parts[0] === 'twitch'  && parts[1]) playTwitch(parts[1]);
 }
 </script>
