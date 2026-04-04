@@ -81,9 +81,20 @@ var bar     = document.getElementById('loading-bar');
 var pctEl   = document.getElementById('loading-pct');
 var loadTxt = document.getElementById('loading-text');
 
-var loadTimer  = null;
-var currentPct = 0;
-var pendingPlay = null; // stores {type, id/channel} to play after bar finishes
+var loadTimer     = null;
+var currentPct    = 0;
+var pendingPlay   = null;    // stores {type, id/channel} to play after bar finishes
+
+// ── FIX: Lautstärke speichern ─────────────────────────────────────────────
+// Damit Änderungen am Regler während des Ladescreens greifen sobald das Video startet.
+var currentVolume = 100;
+
+// ── FIX: Video-Sync (Seek zur richtigen Position) ────────────────────────
+// seekTarget  = Sekunden die das Video auf dem Server bereits läuft
+// seekStarted = Date.now() beim Empfang des Play-Befehls
+// → nach dem Ladebalken wird seekTarget + vergangene Zeit als Zielposition verwendet.
+var seekTarget  = 0;
+var seekStarted = 0;
 
 function hide() {
   standby.style.display = 'none';
@@ -111,17 +122,14 @@ function startLoading(text) {
 
   loadTimer = setInterval(function() {
     var elapsed = Date.now() - startTime;
-    var timePct = Math.min(95, (elapsed / MIN_MS) * 95); // time-based up to 95%
+    var timePct = Math.min(95, (elapsed / MIN_MS) * 95);
 
     if (currentPct < timePct) {
-      // Smooth increment toward time-based target
       setBar(currentPct + (Math.random() * 1.5 + 0.5));
     }
 
-    // Only finish when 7 seconds passed
     if (elapsed >= MIN_MS && currentPct >= 90) {
       clearInterval(loadTimer);
-      // Rush to 100%
       var rush = setInterval(function() {
         if (currentPct < 100) {
           setBar(currentPct + 5);
@@ -130,7 +138,6 @@ function startLoading(text) {
           setTimeout(function() {
             hide();
             frame.style.display = 'block';
-            // NOW start actual playback
             if (pendingPlay) {
               triggerPlay(pendingPlay);
               pendingPlay = null;
@@ -142,27 +149,43 @@ function startLoading(text) {
   }, 80);
 }
 
-// Actually trigger playback inside the iframe (called AFTER bar is done)
+// Wird NACH dem Ladebalken aufgerufen – startet Wiedergabe + Seek + Lautstärke
 function triggerPlay(data) {
   if (data.type === 'youtube') {
-    // Use YouTube API to start playing
+    // Video starten
     try {
       frame.contentWindow.postMessage(
         JSON.stringify({event:'command', func:'playVideo', args:[]}), '*');
     } catch(e) {}
-    // Also try setting volume
+
+    // ── FIX: gespeicherte Lautstärke anwenden (nicht hardcoded 100) ──────
     try {
       frame.contentWindow.postMessage(
-        JSON.stringify({event:'command', func:'setVolume', args:[100]}), '*');
+        JSON.stringify({event:'command', func:'setVolume', args:[currentVolume]}), '*');
     } catch(e) {}
+
+    // ── FIX: Video-Sync — zur richtigen Position springen ────────────────
+    // seekTarget = Sekunden vom Server + Setup-Zeit (bereits in Lua eingerechnet)
+    // + Zeit die seit Empfang des Play-Befehls vergangen ist (Ladebalken-Dauer)
+    var totalSeek = seekTarget + (Date.now() - seekStarted) / 1000;
+    if (totalSeek > 2) {
+      setTimeout(function() {
+        try {
+          frame.contentWindow.postMessage(
+            JSON.stringify({event:'command', func:'seekTo', args:[Math.floor(totalSeek), true]}), '*');
+        } catch(e) {}
+      }, 800);
+    }
   }
-  // Twitch autoplays on its own once visible
+  // Twitch = Livestream → immer aktuell, kein Seek nötig
 }
 
 function stop() {
   clearInterval(loadTimer);
-  frame.src = 'about:blank';
+  frame.src   = 'about:blank';
   pendingPlay = null;
+  seekTarget  = 0;
+  seekStarted = 0;
   hide();
   standby.style.display = 'flex';
 }
@@ -175,8 +198,10 @@ function showError(msg, sub) {
   errBox.style.display = 'flex';
 }
 
-function playYoutube(id) {
-  // Load iframe with autoplay=0 — video loads silently, plays only after bar
+// ── FIX: elapsed mitspeichern für Sync ───────────────────────────────────
+function playYoutube(id, elapsed) {
+  seekTarget  = elapsed || 0;
+  seekStarted = Date.now();
   frame.src = 'https://www.youtube-nocookie.com/embed/' + id
     + '?autoplay=0&mute=0&controls=1&rel=0&modestbranding=1'
     + '&playsinline=1&iv_load_policy=3&enablejsapi=1';
@@ -185,7 +210,9 @@ function playYoutube(id) {
 }
 
 function playTwitch(channel) {
-  // Load twitch paused
+  // Twitch = Livestream → kein Seek nötig
+  seekTarget  = 0;
+  seekStarted = Date.now();
   var host = window.location.hostname;
   frame.src = 'https://player.twitch.tv/?channel=' + encodeURIComponent(channel)
     + '&parent=' + host + '&autoplay=false&muted=true';
@@ -193,42 +220,38 @@ function playTwitch(channel) {
   startLoading('Lade Twitch Stream…');
 }
 
-// After bar: unmute and play twitch
+// Nach Ladebalken: Twitch mit autoplay=true neu laden + Lautstärke setzen
 var origTriggerPlay = triggerPlay;
 triggerPlay = function(data) {
   if (data.type === 'twitch') {
-    // Reload with autoplay=true after delay
     var host = window.location.hostname;
     frame.src = 'https://player.twitch.tv/?channel=' + encodeURIComponent(data.channel)
       + '&parent=' + host + '&autoplay=true&muted=false';
+    // ── FIX: Twitch Lautstärke nach dem Laden setzen ─────────────────
+    setTimeout(function() {
+      try {
+        frame.contentWindow.postMessage(
+          JSON.stringify({event:'setVolume', value: currentVolume / 100}), '*');
+      } catch(e) {}
+    }, 2500);
   } else {
     origTriggerPlay(data);
   }
 };
 
+// ── FIX: Lautstärke speichern + sofort anwenden ──────────────────────────
 function setVolume(val) {
-  // Primary: postMessage to YouTube IFrame API
+  currentVolume = Math.max(0, Math.min(100, val));
+  // YouTube
   try {
     frame.contentWindow.postMessage(
-      JSON.stringify({event:'command', func:'setVolume', args:[val]}), '*');
+      JSON.stringify({event:'command', func:'setVolume', args:[currentVolume]}), '*');
   } catch(e) {}
-  // Fallback: CSS volume via media element
+  // Twitch
   try {
-    var videos = frame.contentDocument
-      ? frame.contentDocument.querySelectorAll('video,audio')
-      : [];
-    for (var i = 0; i < videos.length; i++) {
-      videos[i].volume = val / 100;
-    }
+    frame.contentWindow.postMessage(
+      JSON.stringify({event:'setVolume', value: currentVolume / 100}), '*');
   } catch(e) {}
-  // Visual feedback even if API fails
-  var icon = document.getElementById('volIcon');
-  if (icon) {
-    var w1 = document.getElementById('vol-wave1');
-    var w2 = document.getElementById('vol-wave2');
-    if (w1) w1.style.opacity = val > 0 ? '1' : '0.15';
-    if (w2) w2.style.opacity = val > 50 ? '1' : '0.15';
-  }
 }
 
 window.addEventListener('message', function(e) {
@@ -237,17 +260,34 @@ window.addEventListener('message', function(e) {
   catch(err) { return; }
   if (!d || !d.action) return;
 
-  if      (d.action === 'play_youtube') playYoutube(d.id);
+  // elapsed (d.elapsed) wird von Lua mitgeschickt für Video-Sync
+  if      (d.action === 'play_youtube') playYoutube(d.id, d.elapsed || 0);
   else if (d.action === 'play_twitch')  playTwitch(d.channel);
   else if (d.action === 'stop')         stop();
   else if (d.action === 'volume')       setVolume(d.value);
   else if (d.action === 'error')        showError(d.msg, d.sub);
+  else if (d.action === 'poweroff') {
+    clearInterval(loadTimer);
+    frame.src = 'about:blank';
+    standby.style.display = 'none';
+    loading.style.display = 'none';
+    errBox.style.display  = 'none';
+    frame.style.display   = 'none';
+    document.body.style.background = '#000';
+  }
+  else if (d.action === 'standby') {
+    clearInterval(loadTimer);
+    frame.src = 'about:blank';
+    hide();
+    standby.style.display = 'flex';
+    document.body.style.background = '#000';
+  }
 });
 
 var hash = window.location.hash.slice(1);
 if (hash) {
   var parts = hash.split('/');
-  if      (parts[0] === 'youtube' && parts[1]) playYoutube(parts[1]);
+  if      (parts[0] === 'youtube' && parts[1]) playYoutube(parts[1], 0);
   else if (parts[0] === 'twitch'  && parts[1]) playTwitch(parts[1]);
 }
 </script>
